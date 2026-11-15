@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { downloadEntries, listEntries, moduleMeta, runAction as applyAction } from '@/api/local-service'
+import { loadDownstreamJobs, loadScheduleSummary } from '@/data/schedule-service'
+import { formatDateTime } from '@/data/schedule-time'
+import type { DownstreamJob } from '@/data/schedule-types'
 import type { EntryRow } from '@/data/types'
 
 const meta = moduleMeta('batch')
@@ -42,11 +45,20 @@ const stats = [
   }
 ]
 
+function downstreamBadge(status: DownstreamJob['status']): string {
+  if (status === '已完成') return 'badge ok'
+  if (status === '已失败') return 'badge danger'
+  if (status === '运行中') return 'badge info'
+  return 'badge warn'
+}
+
 export default function BatchView() {
   const [rows, setRows] = useState<EntryRow[]>([])
   const [total, setTotal] = useState(0)
   const [errorMessage, setErrorMessage] = useState('')
   const [filters, setFilters] = useState<Record<string, string>>({})
+  const [downstreamJobs, setDownstreamJobs] = useState<DownstreamJob[]>([])
+  const [scheduleSummary, setScheduleSummary] = useState<ReturnType<typeof loadScheduleSummary> | null>(null)
   const filterFields = useMemo(() => columns.slice(0, 3), [])
 
   const reload = useCallback(() => {
@@ -55,6 +67,9 @@ export default function BatchView() {
       const payload = listEntries(meta.key, filters)
       setRows(payload.items)
       setTotal(payload.total)
+      // 跨模块下游作业清单：只接收编排调度中实际补偿产生的执行批次
+      setDownstreamJobs(loadDownstreamJobs())
+      setScheduleSummary(loadScheduleSummary())
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : '批量转换列表读取失败')
     }
@@ -152,6 +167,70 @@ export default function BatchView() {
           )}
         </tbody>
       </table>
+
+      <section className="panel" data-panel="downstream-jobs">
+        <div className="panel-head">
+          <h3 className="panel-title">下游作业清单（仅漏触发补偿批次）</h3>
+          <span className="panel-sub">
+            补偿批次 {scheduleSummary?.compensationBatchCount ?? 0} 条 · 待落账{' '}
+            {scheduleSummary?.pendingLedgerCount ?? 0} 条
+          </span>
+        </div>
+        <p className="muted small">
+          清单来自编排调度模块的补偿结果：手工批次和被去重的窗口不会进入下游，同一补偿窗口重复到达也只出现一次。
+        </p>
+        <div className="table-scroll">
+          <table className="data-table compact">
+            <thead>
+              <tr>
+                <th>批次编号</th>
+                <th>编排计划</th>
+                <th>任务</th>
+                <th>窗口</th>
+                <th>规则快照</th>
+                <th>尝试次数</th>
+                <th>状态</th>
+                <th>更新时间</th>
+              </tr>
+            </thead>
+            <tbody>
+              {downstreamJobs.map((job) => (
+                <tr key={job.batchId}>
+                  <td>{job.batchCode}</td>
+                  <td>
+                    {job.planCode}
+                    <div className="muted small">{job.planName}</div>
+                  </td>
+                  <td>
+                    {job.taskCode}
+                    <div className="muted small">{job.taskName}</div>
+                  </td>
+                  <td>
+                    {formatDateTime(job.windowStart)}
+                    <div className="muted small">至 {formatDateTime(job.windowEnd)}</div>
+                  </td>
+                  <td>
+                    v{job.ruleVersion}
+                    <div className="muted small mono">{job.scheduleExpression}</div>
+                  </td>
+                  <td>{job.attempt}</td>
+                  <td>
+                    <span className={downstreamBadge(job.status)}>{job.status}</span>
+                  </td>
+                  <td>{formatDateTime(job.bookedAt)}</td>
+                </tr>
+              ))}
+              {downstreamJobs.length === 0 && (
+                <tr>
+                  <td className="empty-state" colSpan={8}>
+                    暂无补偿批次，编排调度执行补偿后这里才会出现下游作业
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
       <footer className="page-foot">
         <span>共 {total} 条批量转换记录</span>

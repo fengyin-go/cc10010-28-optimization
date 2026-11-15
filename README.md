@@ -15,7 +15,8 @@
 │   ├── src/views/            每个业务模块一个页面
 │   ├── src/api/local-service.ts   本地数据服务：列表、筛选、动作流转、导出
 │   ├── src/data/             模块元数据 / 示例数据 / localStorage 持久化
-│   ├── src/stores/           会话与筛选状态
+│   │   └── schedule-*.ts     编排调度领域层：表达式窗口、补偿算法、批次与落账
+│   ├── tests/                node --test 用例（调度表达式、补偿数据流、页面交互）
 │   └── vite.config.ts        dev server 配置（open: false，无 /api 代理）
 ├── .gitignore
 └── docker-compose.yml
@@ -36,6 +37,33 @@ npm run dev
 ```bash
 cd frontend
 npm run build
+```
+
+## 编排调度：漏触发补偿
+
+编排调度模块（`/schedule`）在原有配置列表之外补上了「补偿 → 执行批次 → 任务落账」的数据流，
+核心代码在 `frontend/src/data/schedule-*.ts`：
+
+- `schedule-time.ts`：把分钟级 5 段 cron 表达式解释成窗口边界，支持 `*`、`*/N`、固定值、列表、
+  区间星期以及 `@daily` 等别名；带日期/星期约束的表达式走逐日扫描。
+- `schedule-engine.ts`：只读的补偿预览。先取当前启用规则（同计划多条启用规则按版本号取最新，
+  历史批次保留原规则快照），展开到期窗口，再结合「上次完成位置、并发上限、失败处理」逐窗口
+  比对已有批次，得出真正缺失的窗口；已排队、已完成、被手工批次覆盖的窗口不会重复生成。
+- `schedule-service.ts`：补偿提交（按计划+任务+窗口幂等）、多选任务整组提交（逐条回传执行批次）、
+  批次状态流转、按任务落账，以及只包含实际补偿批次的下游作业清单。
+- `schedule-store.ts`：计划与规则、执行批次、任务落账分开持久化到 `lake-govern-config:schedule`。
+
+失败批次按计划的「失败处理」决定去向：「重试」在原批次上累加尝试次数、从缺失窗口继续；
+「跳过」记入跳过清单后继续；「终止」停在失败窗口，后续窗口全部标记为阻塞。相同补偿窗口
+重复到达时幂等键相同，不会产生第二条批次。
+
+批量转换页（`/batch`）底部的「下游作业清单」只消费 `origin` 为补偿的批次。
+
+测试：
+
+```bash
+cd frontend
+npm test
 ```
 
 ## 业务模块
@@ -63,8 +91,8 @@ npm run build
 
 ## 约定
 
-- 每个模块的页面在 `frontend/src/views/<模块>/index.vue`，页面只负责渲染，读写统一走
-  `frontend/src/api/local-service.ts`。
+- 每个模块的页面在 `frontend/src/views/<模块>/index.tsx`，页面只负责渲染，读写统一走
+  `frontend/src/api/local-service.ts`；编排调度走 `frontend/src/data/schedule-service.ts`。
 - 字段、状态、动作与流转目标集中在 `frontend/src/data/modules.ts`；示例数据在
   `frontend/src/data/seed.ts`。
 - 状态流转只允许在 `local-service.ts` 里改，页面组件不做业务判断。

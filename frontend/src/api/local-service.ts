@@ -1,5 +1,6 @@
 import { MODULE_BY_KEY } from '@/data/modules'
 import { allRows, listRows, resetRows, saveRows } from '@/data/local-store'
+import { getScheduleState } from '@/data/schedule-store'
 import type { ActionResult, EntryRow, ModuleMeta, OverviewResult, PageResult } from '@/data/types'
 
 // 会写进数据的「往回走」动作：命中就把这条记录标成异常态，看板上能一眼看出来。
@@ -84,9 +85,22 @@ export function downloadEntries(key: string): void {
   URL.revokeObjectURL(url)
 }
 
+/** 编排调度改由领域数据层驱动，概览里按计划/执行批次统计，避免与旧配置行重复计数。 */
+function scheduleOverview(): { created: number; pending: number; abnormal: number } {
+  const state = getScheduleState()
+  return {
+    created: state.plans.length,
+    pending: state.batches.filter((batch) => batch.status === '已排队' || batch.status === '运行中').length,
+    abnormal: state.batches.filter((batch) => batch.status === '已失败').length,
+  }
+}
+
 export function loadOverview(): OverviewResult {
   const rows = allRows()
   const modules = [...MODULE_BY_KEY.values()].map((meta) => {
+    if (meta.key === 'schedule') {
+      return { name: meta.name, ...scheduleOverview() }
+    }
     const entries = rows[meta.key] ?? []
     return {
       name: meta.name,
